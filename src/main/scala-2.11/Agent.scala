@@ -15,20 +15,19 @@ trait Data extends Serializable
     bytes.toByteArray
   }
 }
-
-case class NoData() extends Data
-
 object Data {
   def serialize(bytes: Array[Byte]) = {
     val bytesOfObject = new ObjectInputStream(new ByteArrayInputStream(bytes))
     bytesOfObject.readObject() match {
       case agent: Agent => agent
       case partition: Partition => partition
-      case noData: NoData => noData
+      case NoData => NoData
       case _ => throw new IllegalArgumentException("Object to serialize doesn't refer to Data")
     }
   }
 }
+
+case object NoData extends Data
 
 case class Partition(id: String) extends Data {override def toString: String = s"$id"}
 object Partition {

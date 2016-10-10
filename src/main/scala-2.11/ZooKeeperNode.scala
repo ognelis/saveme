@@ -8,17 +8,21 @@ import org.apache.zookeeper.data.Stat
 import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 
+
+
 /**
   * Created by revenskiy_ag on 10.10.16.
   */
 
-
-abstract class ZooKeeperNode(zoo: ZooKeeper, val mode: CreateMode) {
+trait TraversablePath {
   val parentPath: String
   val name: String
+}
 
-  protected def getNodeMetaInformation: Option[Stat] = Option(zoo.zooKeeper.exists(s"$parentPath/$name",false))
-  protected def idOfNode(path: String) = path.substring(path.lastIndexOf("/") + 1)
+
+abstract class ZooKeeperNode(zoo: ZooKeeper, val mode: CreateMode) extends TraversablePath {
+  val parent: ZooKeeperNode
+  val parentPath: String = parent.toString
 
   def setData(data :Data): Boolean = getNodeMetaInformation match {
     case Some(stat) => zoo.zooKeeper.setData(s"$parentPath/$name", data.toByteArray, stat.getVersion); true
@@ -27,7 +31,7 @@ abstract class ZooKeeperNode(zoo: ZooKeeper, val mode: CreateMode) {
   def getData: Data = getNodeMetaInformation match {
       case Some(stat) => {
         val bytes:Array[Byte] = zoo.zooKeeper.getData(s"$parentPath/$name", false, stat)
-        if (bytes.length>1) Data.serialize(bytes) else NoData()
+        if (bytes.length>1) Data.serialize(bytes) else NoData
       }
       case None => throw new NoSuchElementException(s"Node: $parentPath/$name doesn't exist in Zookeeper!")
   }
@@ -37,11 +41,14 @@ abstract class ZooKeeperNode(zoo: ZooKeeper, val mode: CreateMode) {
       case None => throw new NoSuchElementException(s"This Node: $parentPath/$name doesn't exist in Zookeeper!")
   }
   def bindTo(that: ZooKeeperNode): Boolean = that.setData(getData)
+
+  protected def getNodeMetaInformation: Option[Stat] = Option(zoo.zooKeeper.exists(s"$parentPath/$name",false))
+  protected def idOfNode(path: String) = path.substring(path.lastIndexOf("/") + 1)
+
   override def toString: String = s"$parentPath/$name"
 }
 
-
-case class PathNode(zoo: ZooKeeper, override val name: String, parentPath: String)
+case class PathNode(zoo: ZooKeeper, override val name: String, parent: ZooKeeperNode)
   extends ZooKeeperNode(zoo, CreateMode.PERSISTENT)
 {
   val children: mutable.ArrayBuffer[ZooKeeperNode] = mutable.ArrayBuffer[ZooKeeperNode]()
@@ -49,43 +56,39 @@ case class PathNode(zoo: ZooKeeper, override val name: String, parentPath: Strin
     zoo.zooKeeper.create(s"$parentPath/$name", Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode)
 }
 
-
-//side effect
-case class MasterNode(zoo: ZooKeeper, parentPath: String)
+case class MasterNode(zoo: ZooKeeper, parent: PathNode)
   extends ZooKeeperNode(zoo, CreateMode.PERSISTENT_SEQUENTIAL)
 {
-  override val name = idOfNode(zoo.zooKeeper.create(s"$parentPath/", Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode))
+  override lazy val name = idOfNode(zoo.zooKeeper.create(s"$parentPath/", Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode))
   override def create(): String = name
 }
 
-
-
-case class ParticipantNode(zoo: ZooKeeper, parentPath: String)
+case class ParticipantNode(zoo: ZooKeeper, parent: PathNode)
   extends ZooKeeperNode(zoo, CreateMode.PERSISTENT_SEQUENTIAL)
 {
-  private val children: mutable.ArrayBuffer[DataNode] = mutable.ArrayBuffer[DataNode]()
-  def addChild(data: DataNode) = {
-    zoo.zooKeeper.getChildren(s"$parentPath/$name",myWatcher,callbackChildren,None)
-    addChildAndCreate(data)
-  }
+  zoo.zooKeeper.getChildren(s"$parentPath/$name",false,callbackChildren,None)
 
-  private val myWatcher:Watcher = new Watcher() {override def process(event: WatchedEvent): Unit = {}}
-  private var childrenCallback: mutable.Buffer[String] = new mutable.ArrayBuffer[String]()
-  private def callbackChildren = new ChildrenCallback {
+  private val children: mutable.ArrayBuffer[DataNode] = mutable.ArrayBuffer[DataNode]()
+
+  var childrenCallback: mutable.Buffer[String] = new mutable.ArrayBuffer[String]()
+  private val callbackChildren = new ChildrenCallback {
     override def processResult(rc: Int, path: String, ctx: scala.Any, children: util.List[String]): Unit = {
       import collection.JavaConverters._
       childrenCallback = children.asScala
     }
   }
 
-  def addChildAndCreate(data: DataNode) = {children += data; data.create()}
-  override val name = idOfNode(zoo.zooKeeper.create(s"$parentPath/", Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode))
+  def addChildAndCreate(data: DataNode) = {
+    children += data; data.create()
+    zoo.zooKeeper.getChildren(s"$parentPath/$name",false,callbackChildren,None)
+  }
+  override lazy val name = idOfNode(zoo.zooKeeper.create(s"$parentPath/", Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode))
   override def create(): String = name
 }
 
 
 
-case class DataNode(zoo: ZooKeeper, parentPath: String, data: Data)
+case class DataNode(zoo: ZooKeeper, parent: ParticipantNode, data: Data)
   extends ZooKeeperNode(zoo, CreateMode.EPHEMERAL)
 {
   val masterAgents: scala.collection.concurrent.TrieMap[String, Agent] = new TrieMap()
@@ -111,10 +114,13 @@ case class DataNode(zoo: ZooKeeper, parentPath: String, data: Data)
   }
 }
 
-
-case class Root(zoo: ZooKeeper, participantPathName: String, masterPathName: String)
+case class Root(zoo: ZooKeeper, participantPathName: String, masterPathName: String) extends ZooKeeperNode(zoo,CreateMode.PERSISTENT)
 {
-  val parent = ""
-  val masterPath: PathNode = PathNode(zoo, masterPathName, parent)
-  val participantPath: PathNode = PathNode(zoo, participantPathName, parent)
+  lazy val parent = this
+  val name: String = ""
+  val masterPath: PathNode = PathNode(zoo, masterPathName, this)
+  val participantPath: PathNode = PathNode(zoo, participantPathName, this)
+
+  override def create(): String = ""
+  override def toString: String = ""
 }
