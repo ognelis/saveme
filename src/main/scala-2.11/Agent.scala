@@ -6,18 +6,42 @@ import scala.collection.concurrent.TrieMap
   * Created by revenskiy_ag on 05.10.16.
   */
 
-trait Agent extends Serializable {
-  val address: String
-  val port: String
-  val id: String
-  var masterAgents: scala.collection.concurrent.TrieMap[String, Agent] = new TrieMap()
-
+trait Data extends Serializable
+{
   def toByteArray = {
     val bytes = new java.io.ByteArrayOutputStream()
     val oos   = new ObjectOutputStream(bytes)
     oos.writeObject(this); oos.close()
     bytes.toByteArray
   }
+}
+
+case class NoData() extends Data
+
+object Data {
+  def serialize(bytes: Array[Byte]) = {
+    val bytesOfObject = new ObjectInputStream(new ByteArrayInputStream(bytes))
+    bytesOfObject.readObject() match {
+      case agent: Agent => agent
+      case partition: Partition => partition
+      case noData: NoData => noData
+      case _ => throw new IllegalArgumentException("Object to serialize doesn't refer to Data")
+    }
+  }
+}
+
+case class Partition(id: String) extends Data {override def toString: String = s"$id"}
+object Partition {
+  def serialize(bytes: Array[Byte]) = {
+    val bytesOfObject = new ObjectInputStream(new ByteArrayInputStream(bytes))
+    bytesOfObject.readObject().asInstanceOf[Partition]
+  }
+}
+
+trait Agent extends Data {
+  val address: String
+  val port: String
+  val id: String
 
   def canEqual(other: Any): Boolean = other.isInstanceOf[Agent]
 
@@ -42,6 +66,8 @@ object Agent {
   }
   def serialize(bytes: Array[Byte]) = {
     val bytesOfObject = new ObjectInputStream(new ByteArrayInputStream(bytes))
-    bytesOfObject.readObject().asInstanceOf[Agent]
+    bytesOfObject.readObject() match {
+      case agent: Agent => agent
+    }
   }
 }

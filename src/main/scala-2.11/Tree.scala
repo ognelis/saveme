@@ -10,27 +10,28 @@ import org.apache.zookeeper.data.Stat
 import org.apache.zookeeper.{CreateMode, WatchedEvent, Watcher, ZooDefs}
 
 
-class ZooTree(ipAddress: InetAddress, port: Int) {
-  val logger = ZooTree.logger
+class ZooKeeper(ipAddress: InetAddress, port: Int) {
+  val logger = ZooKeeper.logger
 
   val amount =  ZooKeeperUtils.DEFAULT_ZK_SESSION_TIMEOUT
   val zooKeeperClient = new ZooKeeperClient(amount, new InetSocketAddress(ipAddress,port))
   val zooKeeper = zooKeeperClient.get()
 }
 
-class Stream(tree: ZooTree, participantName: String, masterName: String) {
+class Stream(tree: ZooKeeper, participantName: String, masterName: String) {
   private val masterPath = s"/$masterName"
   private val participantPath = s"/$participantName"
 
   def configure() = {
     val mode = CreateMode.PERSISTENT
+
     tree.zooKeeper.create(masterPath, Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode)
     tree.zooKeeper.create(participantPath, Array[Byte](0), ZooDefs.Ids.OPEN_ACL_UNSAFE, mode)
   }
 
-  def getAllMasterIds: java.util.List[String] = tree.zooKeeper.getChildren(masterPath,false)
-  def getAllParticipantsIds: java.util.List[String] = tree.zooKeeper.getChildren(participantPath,false)
-  private def checkMasterAndParticipiantsNumber = getAllMasterIds.size() >= getAllParticipantsIds.size()
+//  def getAllMasterIds: java.util.List[String] = tree.zooKeeper.getChildren(masterPath,false)
+//  def getAllParticipantsIds: java.util.List[String] = tree.zooKeeper.getChildren(participantPath,false)
+//  private def checkMasterAndParticipiantsNumber = getAllMasterIds.size() >= getAllParticipantsIds.size()
 
   private def getStat(path: String,id: String) = Option(tree.zooKeeper.exists(s"$path/$id",false))
   private def getMasterStat(id: String): Option[Stat] = getStat(masterPath, id)
@@ -96,7 +97,7 @@ class Stream(tree: ZooTree, participantName: String, masterName: String) {
     }
   }
 
-  def myWatcher:Watcher = new Watcher() {override def process(event: WatchedEvent): Unit = {}}
+  private val myWatcher:Watcher = new Watcher() {override def process(event: WatchedEvent): Unit = {}}
 
 
   private var childrenCallback: scala.collection.mutable.Seq[String] = scala.collection.mutable.Seq()
@@ -117,10 +118,10 @@ class Stream(tree: ZooTree, participantName: String, masterName: String) {
           agents.head.masterAgents.withDefault(key => chooseMaster(agents, key))(masterId)
           lockedMaster.unlock()
 
+          val newMaster = getMasterData(masterId).get
           agents.tail foreach { agent =>
             lockedMaster.tryLock(100, java.util.concurrent.TimeUnit.MILLISECONDS)
-            val newMaster = getMasterData(masterId).get
-            agent.masterAgents.withDefault(key => getMasterData(key).get)(masterId) = newMaster
+            agent.masterAgents.withDefault(key => newMaster)(masterId) = newMaster
             lockedMaster.unlock()
           }
         }
@@ -175,7 +176,7 @@ class Stream(tree: ZooTree, participantName: String, masterName: String) {
   }
 }
 
-private object ZooTree {
+private object ZooKeeper {
   import org.apache.log4j.BasicConfigurator
   import org.apache.logging.log4j.LogManager
   BasicConfigurator.configure()
